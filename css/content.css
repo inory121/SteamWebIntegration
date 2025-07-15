@@ -36,8 +36,11 @@
     gap: 10px;
     z-index: 9999;
     border-top: 1px solid #000;
-    height: 30px;
-    overflow-x: scroll;
+    min-height: 30px;
+    height: auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+    box-sizing: border-box;
 }
 
 .swi-toolbar-section {
@@ -111,9 +114,14 @@
 }
 
 .swi-toolbar.hide-mode .icon-filter.filtered {
-    opacity: 0.25;
+    opacity: 1;
 }
 
 .swi-toolbar.only-mode .icon-filter.filtered {
     opacity: 1;
+}
+
+.swi-toolbar > * {
+    max-width: 100%;
+    box-sizing: border-box;
 }

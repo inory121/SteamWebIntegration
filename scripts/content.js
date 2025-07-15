@@ -201,6 +201,8 @@ function doSub(elem, ownedPackages, bundles, lcs, blcs) {
     }, 0);
 }
 
+let doSWI; // 全局变量
+
 function integrate(userdata, decommissioned, cards, bundles, limited, dlcs, lastCached) {
     const { ignoredApps, ownedApps, ownedPackages, followedApps, wishlist } = userdata;
 
@@ -232,7 +234,8 @@ function integrate(userdata, decommissioned, cards, bundles, limited, dlcs, last
     ].map((s) => `${s}:not(.swi)`).join(", ");
 
     let delaySWI;
-    const doSWI = (delay = 750) => {
+    doSWI = (delay = 750) => {
+        
         if (delaySWI) {
             clearTimeout(delaySWI);
         }
@@ -339,6 +342,24 @@ function addStyle(css) {
     document.head.appendChild(style);
 }
 
+function addToolbarIconStyles(iconConfigs) {
+    let style = document.createElement("style");
+    let css = `.icon-filter i { color: #888 !important; transition: color 0.2s; }\n`;
+    iconConfigs.forEach(({ name, icon, color }) => {
+        // 生成唯一class名
+        css += `.icon-filter.filtered.fa-${icon} { color: ${color} !important; }\n`;
+    });
+    style.innerHTML = css;
+    document.head.appendChild(style);
+}
+
+// 恢复原有颜色方案，但未选中时为灰色，选中时为原色
+function addToolbarIconGrayStyle() {
+    let style = document.createElement("style");
+    style.innerHTML = `.icon-filter:not(.filtered) i { color: #888 !important; }`;
+    document.head.appendChild(style);
+}
+
 async function init() {
     settings = await chrome.runtime.sendMessage({ "action": "getSettings" });
     let css = `:root {
@@ -357,14 +378,55 @@ async function init() {
         addStylesheet("/css/fontawesome.min.css");
         addStylesheet("/css/solid.min.css");
         integrate(userdata, decommissioned, cards, bundles, limited, dlcs, lastCached);
+
+        // 新增：仅在 steampy.com，监听页面底部分页栏点击，切换页码后自动刷新页面
+        if (location.hostname.includes('steampy.com')) {
+            document.querySelectorAll('nav.zpagenav .page-ul li').forEach(li => {
+                li.addEventListener('click', () => {
+                    setTimeout(() => {
+                        location.reload();
+                    }, 300);
+                });
+            });
+        }
+    }
+
+    // 只在 steampy.com 页面加载后自动插入工具栏，不依赖消息
+    if (location.hostname.includes('steampy.com')) {
+        setTimeout(() => {
+            if (!document.querySelector('.swi-toolbar')) {
+                console.log('[SWI] 自动插入工具栏');
+                const toolbar = createToolbar();
+                document.body.appendChild(toolbar);
+                // 工具栏插入后，强制再筛选一次
+                setTimeout(() => {
+                    // 触发一次筛选，确保内容已渲染
+                    const activeFilters = new Set();
+                    // 只让“卡牌”icon默认选中
+                    activeFilters.add(settings.cardIcon);
+                    applyFilters(activeFilters, 0, 'only');
+                }, 100);
+            } else {
+                console.log('[SWI] 工具栏已存在');
+            }
+        }, 500);
     }
 }
 
 function applyFilters(activeFilters, depth, mode) {
-    document.querySelectorAll(".swi-hidden").forEach((node) => node.classList.remove("swi-hidden"));
+    // 先全部显示
+    document.querySelectorAll(".swi-block").forEach((block) => {
+        // 找到最近的.gameblock父级
+        const gameBlock = block.closest('.gameblock');
+        if (gameBlock) {
+            gameBlock.classList.remove("swi-hidden");
+        } else {
+            block.classList.remove("swi-hidden");
+        }
+    });
 
     document.querySelectorAll(".swi-block").forEach((block) => {
-        const blockIcons = [...block.childNodes].map((node) => node.querySelector(".swi").getAttribute("class")).join(" ");
+        const blockIcons = [...block.childNodes].map((node) => node.querySelector(".swi")?.getAttribute("class") || "").join(" ");
 
         const shouldHide = mode === "hide"
             ? [...activeFilters].some((filter) => blockIcons.includes(`fa-${filter}`))
@@ -381,8 +443,14 @@ function applyFilters(activeFilters, depth, mode) {
             }
         }
 
+        // 隐藏/显示最近的.gameblock父级
+        const gameBlock = target.closest('.gameblock');
         if (shouldHide) {
-            target.classList.add("swi-hidden");
+            if (gameBlock) {
+                gameBlock.classList.add("swi-hidden");
+            } else {
+                target.classList.add("swi-hidden");
+            }
         }
     });
 }
@@ -409,9 +477,10 @@ function createToolbar() {
     const filterMode = document.createElement("select");
     filterMode.className = "filter-mode";
     filterMode.innerHTML = `
-        <option value="hide">Hide</option>
-        <option value="only">Only</option>
+        <option value="hide" >Hide</option>
+        <option value="only" selected>Only</option>
     `;
+    filterMode.value = "only"; // 强制默认only
 
     filterMode.addEventListener("change", () => {
         toolbar.className = `swi-toolbar ${filterMode.value}-mode`;
@@ -439,11 +508,23 @@ function createToolbar() {
         { "name": "Bundle", "color": settings.bundleColor, "icon": settings.bundleIcon },
     ];
 
+    // 恢复原有高亮色方案，未选中时为灰色
+    addToolbarIconGrayStyle();
+
     iconConfigs.forEach(({ name, color, icon }) => {
         const iconSpan = document.createElement("span");
         iconSpan.className = "icon-filter";
-        iconSpan.innerHTML = `<i class="swi fa-solid fa-${icon}" style="color: ${color}"></i>`;
+        iconSpan.innerHTML = `<i class=\"swi fa-solid fa-${icon}\" style=\"color: ${color}\"></i>`;
         iconSpan.title = name;
+
+        // 只让“卡牌”icon默认选中，其他不选
+        if (name === "Cards") {
+            iconSpan.classList.add("filtered");
+            activeFilters.add(icon);
+        } else {
+            iconSpan.classList.remove("filtered");
+            activeFilters.delete(icon);
+        }
 
         iconSpan.addEventListener("click", () => {
             iconSpan.classList.toggle("filtered");
@@ -550,6 +631,11 @@ function createToolbar() {
     toolbar.appendChild(copySection);
     toolbar.appendChild(divider.cloneNode(false));
     toolbar.appendChild(closeButton);
+
+    // 初始化时应用筛选
+    setTimeout(() => {
+        applyFilters(activeFilters, depthSlider.value, filterMode.value);
+    }, 0);
 
     return toolbar;
 }
